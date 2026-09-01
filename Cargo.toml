@@ -3,6 +3,10 @@ name = "mouse"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Enable the gesture trail overlay (requires the extra GDI/shape features).
+trail = []
+
 [dependencies]
 enigo = "0.6"
 serde = { version = "1", features = ["derive"] }

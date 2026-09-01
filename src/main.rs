@@ -13,7 +13,7 @@ use platform::windows::WindowsPlatform;
 use crate::platform::{config_path, Platform};
 
 fn main() -> ExitCode {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "trail"))]
     set_dpi_awareness();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(args) {
@@ -27,7 +27,7 @@ fn main() -> ExitCode {
 
 /// Make the process per-monitor DPI aware so screen metrics and pointer
 /// coordinates are both physical pixels (needed for the trail overlay).
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "trail"))]
 fn set_dpi_awareness() {
     use windows::Win32::UI::HiDpi::{
         SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -39,6 +39,7 @@ fn set_dpi_awareness() {
 
 fn run(args: Vec<String>) -> Result<(), String> {
     let identify = args.iter().any(|a| a == "--identify" || a == "identify");
+    #[cfg(feature = "trail")]
     let overlay_test = args.iter().any(|a| a == "--overlay-test");
 
     #[cfg(target_os = "linux")]
@@ -56,6 +57,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
     }
 
+    #[cfg(feature = "trail")]
     if overlay_test {
         return run_overlay_test();
     }
@@ -71,7 +73,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
 
 /// Draw a temporary sine curve trail for a few seconds so the overlay can be
 /// verified independently of gesture capture.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "trail"))]
 fn run_overlay_test() -> Result<(), String> {
     use x11rb::connect;
     let (conn, screen_num) = connect(None).map_err(|e| format!("connect: {e}"))?;
@@ -90,7 +92,7 @@ fn run_overlay_test() -> Result<(), String> {
 
 /// Draw a temporary sine curve trail for a few seconds so the overlay can be
 /// verified independently of gesture capture.
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "trail"))]
 fn run_overlay_test() -> Result<(), String> {
     let mut overlay = crate::platform::win_overlay::WinOverlay::create()
         .ok_or("overlay not available")?

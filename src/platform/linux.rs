@@ -8,6 +8,7 @@ use x11rb::{connect, protocol::Event};
 use crate::config::Config;
 use crate::gesture::GestureTracker;
 use crate::platform::{dispatch, Platform};
+#[cfg(feature = "trail")]
 use crate::platform::x11_overlay::X11Overlay;
 
 /// Right mouse button (X11 button 3).
@@ -125,6 +126,7 @@ impl Platform for LinuxPlatform {
     fn run(&mut self, config: &Config) -> Result<(), String> {
         self.grab_right_button()?;
 
+        #[cfg(feature = "trail")]
         let overlay = match X11Overlay::create(&self.conn, self.screen_num) {
             Some(Ok(overlay)) => Some(overlay),
             Some(Err(e)) => {
@@ -150,6 +152,7 @@ impl Platform for LinuxPlatform {
                 Event::ButtonPress(ev) if ev.detail == RIGHT_BUTTON => {
                     tracker.start(ev.root_x as f64, ev.root_y as f64);
                     tracking = true;
+                    #[cfg(feature = "trail")]
                     if let Some(overlay) = &overlay {
                         if let Err(e) = overlay.show(&self.conn) {
                             eprintln!("[mouse] {e}");
@@ -158,6 +161,7 @@ impl Platform for LinuxPlatform {
                 }
                 Event::MotionNotify(ev) if tracking => {
                     tracker.add(ev.root_x as f64, ev.root_y as f64);
+                    #[cfg(feature = "trail")]
                     if let Some(overlay) = &overlay {
                         if let Err(e) = overlay.draw(&self.conn, tracker.points()) {
                             eprintln!("[mouse] {e}");
@@ -166,6 +170,7 @@ impl Platform for LinuxPlatform {
                 }
                 Event::ButtonRelease(ev) if tracking && ev.detail == RIGHT_BUTTON => {
                     tracking = false;
+                    #[cfg(feature = "trail")]
                     if let Some(overlay) = &overlay {
                         if let Err(e) = overlay.hide(&self.conn) {
                             eprintln!("[mouse] {e}");

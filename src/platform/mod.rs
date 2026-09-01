@@ -5,9 +5,9 @@ use crate::gesture::Outcome;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "trail"))]
 pub mod x11_overlay;
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "trail"))]
 pub mod win_overlay;
 #[cfg(target_os = "windows")]
 pub mod windows;

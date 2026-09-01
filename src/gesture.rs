@@ -23,12 +23,11 @@ pub struct GestureTracker {
     acc_y: f64,
     dirs: Vec<usize>,
     seg_lens: Vec<f64>,
+    #[cfg(feature = "trail")]
     points: Vec<(f64, f64)>,
 }
 
-/// Minimum squared distance between two sampled trail points.
-const POINT_MIN_DIST_SQ: f64 = 4.0;
-
+#[cfg(feature = "trail")]
 impl GestureTracker {
     /// Raw pointer positions collected while the gesture button is held,
     /// suitable for drawing the gesture trail.
@@ -36,6 +35,10 @@ impl GestureTracker {
         &self.points
     }
 }
+
+/// Minimum squared distance between two sampled trail points.
+#[cfg(feature = "trail")]
+const POINT_MIN_DIST_SQ: f64 = 4.0;
 
 /// Outcome of a finished gesture.
 #[derive(Debug, PartialEq)]
@@ -55,8 +58,11 @@ impl GestureTracker {
         self.acc_y = 0.0;
         self.dirs.clear();
         self.seg_lens.clear();
-        self.points.clear();
-        self.points.push((x, y));
+        #[cfg(feature = "trail")]
+        {
+            self.points.clear();
+            self.points.push((x, y));
+        }
     }
 
     /// Feed a new pointer position while the button is held.
@@ -68,6 +74,7 @@ impl GestureTracker {
         self.acc_y += y - ly;
         self.last = Some((x, y));
 
+        #[cfg(feature = "trail")]
         if let Some(&(px, py)) = self.points.last() {
             let dx = x - px;
             let dy = y - py;
@@ -187,6 +194,7 @@ mod tests {
         assert_eq!(t.finish(100.0, 0.0), Some(Outcome::Gesture("R".into())));
     }
 
+    #[cfg(feature = "trail")]
     #[test]
     fn trail_points_are_sampled() {
         let mut t = GestureTracker::default();

@@ -9,20 +9,25 @@ use windows::Win32::System::Threading::{
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetForegroundWindow, GetWindowThreadProcessId, MSG, PM_REMOVE,
-    PeekMessageW, TranslateMessage,
+    GetForegroundWindow, GetWindowThreadProcessId,
+};
+#[cfg(feature = "trail")]
+use windows::Win32::UI::WindowsAndMessaging::{
+    DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
 };
 use windows::core::PWSTR;
 
 use crate::config::Config;
 use crate::gesture::{GestureTracker, Outcome};
 use crate::platform::Platform;
+#[cfg(feature = "trail")]
 use crate::platform::win_overlay::WinOverlay;
 
 /// Gesture tracker state, only touched by the hook callback thread.
 static STATE: OnceLock<Mutex<GestureState>> = OnceLock::new();
 
 /// Command for the trail overlay worker thread.
+#[cfg(feature = "trail")]
 enum OverlayMsg {
     Show,
     Draw(Vec<(f64, f64)>),
@@ -152,7 +157,9 @@ impl Platform for WindowsPlatform {
         // object (DC, DIB, pen) is created and used on the same thread --
         // GDI handles are thread-affine and crossing threads is UB. The hook
         // callback only sends cheap, coalesced messages.
+        #[cfg(feature = "trail")]
         let (otx, orx) = mpsc::channel::<OverlayMsg>();
+        #[cfg(feature = "trail")]
         std::thread::spawn(move || overlay_thread(orx));
 
         let callback = move |event: Event| -> Option<Event> {
@@ -171,12 +178,14 @@ impl Platform for WindowsPlatform {
                     };
                     state.tracker.start(x, y);
                     state.tracking = true;
+                    #[cfg(feature = "trail")]
                     let _ = otx.send(OverlayMsg::Show);
                     None // swallow the press so the context menu does not open
                 }
                 EventType::MouseMove { x, y } if state.tracking => {
                     update_pos(x, y);
                     state.tracker.add(x, y);
+                    #[cfg(feature = "trail")]
                     let _ = otx.send(OverlayMsg::Draw(state.tracker.points().to_vec()));
                     Some(event) // pass through so the cursor can still move
                 }
@@ -193,6 +202,7 @@ impl Platform for WindowsPlatform {
                         return Some(event);
                     }
                     state.tracking = false;
+                    #[cfg(feature = "trail")]
                     let _ = otx.send(OverlayMsg::Hide);
                     let Some((x, y)) = last_pos() else {
                         return None;
@@ -225,6 +235,7 @@ impl Platform for WindowsPlatform {
 /// callback are coalesced: only the latest `Draw` is rendered, which keeps the
 /// overlay responsive and avoids flooding the system with redraws. A message
 /// pump is run so the layered window receives and processes its messages.
+#[cfg(feature = "trail")]
 fn overlay_thread(rx: mpsc::Receiver<OverlayMsg>) {
     let mut overlay = match WinOverlay::create() {
         Some(Ok(o)) => o,
