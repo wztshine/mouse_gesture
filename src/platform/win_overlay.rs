@@ -34,11 +34,13 @@ pub struct WinOverlay {
     height: i32,
     offset_x: i32,
     offset_y: i32,
+    prev_bbox: Option<(i32, i32, i32, i32)>,
 }
 
-/// WinOverlay holds raw window handles and a DIB pointer. It is only ever
-/// touched from the hook callback thread, which serializes all access.
+/// WinOverlay must be created and used on the same thread: GDI objects (the
+/// DC, DIB and pen) are thread-affine. The overlay worker thread does both.
 unsafe impl Send for WinOverlay {}
+unsafe impl Sync for WinOverlay {}
 
 /// Window procedure: hand everything to the default handler.
 unsafe extern "system" fn wnd_proc(
@@ -84,11 +86,12 @@ impl WinOverlay {
     }
 
     /// Redraw the overlay with the given trail points.
-    pub fn draw(&self, points: &[(f64, f64)]) -> Result<(), String> {
-        // Clear to fully transparent (alpha = 0).
-        let n = (self.width * self.height) as usize;
-        unsafe {
-            std::ptr::write_bytes(self.bits, 0, n);
+    pub fn draw(&mut self, points: &[(f64, f64)]) -> Result<(), String> {
+        // Clear only the region the previous trail occupied (grown by the pen
+        // width) instead of the whole screen, which is costly on large
+        // multi-monitor DPI-scaled surfaces.
+        if let Some((px, py, pw, ph)) = self.prev_bbox {
+            self.zero_region(px, py, pw, ph);
         }
 
         if points.len() >= 2 {
@@ -106,32 +109,70 @@ impl WinOverlay {
             // GDI leaves the alpha channel at 0; mark drawn pixels opaque so
             // they become visible through UpdateLayeredWindow. Only the
             // bounding box of the trail is scanned to keep this cheap.
-            let min_x = pts.iter().map(|p| p.x).min().unwrap_or(0).max(0);
-            let min_y = pts.iter().map(|p| p.y).min().unwrap_or(0).max(0);
-            let max_x = pts.iter().map(|p| p.x).max().unwrap_or(0).min(self.width - 1);
-            let max_y = pts.iter().map(|p| p.y).max().unwrap_or(0).min(self.height - 1);
-            let row_len = self.width as usize;
-            unsafe {
-                for y in min_y..=max_y {
-                    let base = (y as usize) * row_len;
-                    for x in min_x..=max_x {
-                        let i = base + x as usize;
-                        let px = *self.bits.add(i);
-                        if px & 0x00FF_FFFF != 0 {
-                            *self.bits.add(i) = px | 0xFF00_0000;
-                        }
-                    }
-                }
-            }
+            let margin = LINE_WIDTH;
+            let min_x = (pts.iter().map(|p| p.x).min().unwrap_or(0) - margin).max(0);
+            let min_y = (pts.iter().map(|p| p.y).min().unwrap_or(0) - margin).max(0);
+            let max_x = (pts.iter().map(|p| p.x).max().unwrap_or(0) + margin).min(self.width - 1);
+            let max_y = (pts.iter().map(|p| p.y).max().unwrap_or(0) + margin).min(self.height - 1);
+            self.prev_bbox = Some((min_x, min_y, max_x, max_y));
+            self.set_alpha(min_x, min_y, max_x, max_y);
         }
 
         self.push().map_err(|e| format!("failed to update overlay: {e}"))
     }
 
     /// Hide the overlay.
-    pub fn hide(&self) -> Result<(), String> {
+    pub fn hide(&mut self) -> Result<(), String> {
+        if let Some((px, py, pw, ph)) = self.prev_bbox.take() {
+            self.zero_region(px, py, pw, ph);
+        }
         let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
         Ok(())
+    }
+
+    /// Zero out all pixels (color + alpha) in the given region so the trail
+    /// disappears. Coordinates are in window space, inclusive.
+    fn zero_region(&self, x0: i32, y0: i32, x1: i32, y1: i32) {
+        if x0 > x1 || y0 > y1 {
+            return;
+        }
+        let row_len = self.width as usize;
+        let x0 = x0.max(0) as usize;
+        let y0 = y0.max(0) as usize;
+        let x1 = x1.min(self.width - 1) as usize;
+        let y1 = y1.min(self.height - 1) as usize;
+        let len = x1 - x0 + 1;
+        unsafe {
+            for y in y0..=y1 {
+                let base = y * row_len + x0;
+                std::ptr::write_bytes(self.bits.add(base), 0, len);
+            }
+        }
+    }
+
+    /// Force the alpha channel to opaque for every non-transparent pixel in a
+    /// region, revealing the GDI-drawn line through the layered window.
+    fn set_alpha(&self, x0: i32, y0: i32, x1: i32, y1: i32) {
+        if x0 > x1 || y0 > y1 {
+            return;
+        }
+        let x0 = x0.max(0) as usize;
+        let y0 = y0.max(0) as usize;
+        let x1 = x1.min(self.width - 1) as usize;
+        let y1 = y1.min(self.height - 1) as usize;
+        let row_len = self.width as usize;
+        unsafe {
+            for y in y0..=y1 {
+                let base = y * row_len;
+                for x in x0..=x1 {
+                    let i = base + x;
+                    let px = *self.bits.add(i);
+                    if px & 0x00FF_FFFF != 0 {
+                        *self.bits.add(i) = px | 0xFF00_0000;
+                    }
+                }
+            }
+        }
     }
 
     /// Composite the DIB backing store into the layered window.
@@ -281,5 +322,6 @@ fn create_inner() -> Result<WinOverlay, String> {
         height,
         offset_x,
         offset_y,
+        prev_bbox: None,
     })
 }

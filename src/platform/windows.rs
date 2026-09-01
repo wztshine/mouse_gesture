@@ -8,7 +8,10 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DispatchMessageW, GetForegroundWindow, GetWindowThreadProcessId, MSG, PM_REMOVE,
+    PeekMessageW, TranslateMessage,
+};
 use windows::core::PWSTR;
 
 use crate::config::Config;
@@ -145,35 +148,12 @@ impl Platform for WindowsPlatform {
             }
         });
 
-        // The trail overlay is created here on the main thread (window/GDI
-        // resources) and driven by a dedicated worker thread. The hook
-        // callback only sends cheap messages and never touches the overlay.
+        // The trail overlay is created on its own worker thread so every GDI
+        // object (DC, DIB, pen) is created and used on the same thread --
+        // GDI handles are thread-affine and crossing threads is UB. The hook
+        // callback only sends cheap, coalesced messages.
         let (otx, orx) = mpsc::channel::<OverlayMsg>();
-        let overlay = match WinOverlay::create() {
-            Some(Ok(o)) => Some(o),
-            Some(Err(e)) => {
-                eprintln!("[mouse] trail overlay disabled: {e}");
-                None
-            }
-            None => {
-                eprintln!("[mouse] trail overlay disabled");
-                None
-            }
-        };
-        if let Some(overlay) = overlay {
-            std::thread::spawn(move || {
-                while let Ok(msg) = orx.recv() {
-                    let result = match msg {
-                        OverlayMsg::Show => overlay.show(),
-                        OverlayMsg::Draw(points) => overlay.draw(&points),
-                        OverlayMsg::Hide => overlay.hide(),
-                    };
-                    if let Err(e) = result {
-                        eprintln!("[mouse] {e}");
-                    }
-                }
-            });
-        }
+        std::thread::spawn(move || overlay_thread(orx));
 
         let callback = move |event: Event| -> Option<Event> {
             let mut state = STATE
@@ -235,5 +215,74 @@ impl Platform for WindowsPlatform {
 
         grab(callback).map_err(|e| format!("failed to install input hook: {e:?}"))?;
         Ok(())
+    }
+}
+
+/// Run the trail overlay on a dedicated thread.
+///
+/// The overlay window and all GDI objects are created here so they live on a
+/// single thread (GDI handles are thread-affine). Messages from the hook
+/// callback are coalesced: only the latest `Draw` is rendered, which keeps the
+/// overlay responsive and avoids flooding the system with redraws. A message
+/// pump is run so the layered window receives and processes its messages.
+fn overlay_thread(rx: mpsc::Receiver<OverlayMsg>) {
+    let mut overlay = match WinOverlay::create() {
+        Some(Ok(o)) => o,
+        Some(Err(e)) => {
+            eprintln!("[mouse] trail overlay disabled: {e}");
+            return;
+        }
+        None => {
+            eprintln!("[mouse] trail overlay disabled");
+            return;
+        }
+    };
+
+    // Pump window messages (required for the layered window to behave) while
+    // waiting for and coalescing overlay commands.
+    let mut pending: Option<OverlayMsg> = None;
+    loop {
+        let mut msg = MSG::default();
+        let has_msg = unsafe {
+            PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool()
+        };
+        if has_msg {
+            unsafe {
+                let _ = TranslateMessage(&msg);
+                let _ = DispatchMessageW(&msg);
+            }
+            continue;
+        }
+
+        // Drain any queued commands (non-blocking) and coalesce Draw messages
+        // so a fast-moving mouse does not flood the renderer.
+        loop {
+            match rx.try_recv() {
+                Ok(OverlayMsg::Show) => {
+                    pending = Some(OverlayMsg::Show);
+                }
+                Ok(OverlayMsg::Draw(points)) => {
+                    pending = Some(OverlayMsg::Draw(points));
+                }
+                Ok(OverlayMsg::Hide) => {
+                    pending = Some(OverlayMsg::Hide);
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => return,
+            }
+        }
+
+        if let Some(msg) = pending.take() {
+            let result = match msg {
+                OverlayMsg::Show => overlay.show(),
+                OverlayMsg::Draw(points) => overlay.draw(&points),
+                OverlayMsg::Hide => overlay.hide(),
+            };
+            if let Err(e) = result {
+                eprintln!("[mouse] {e}");
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(4));
     }
 }

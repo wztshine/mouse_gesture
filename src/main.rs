@@ -92,7 +92,7 @@ fn run_overlay_test() -> Result<(), String> {
 /// verified independently of gesture capture.
 #[cfg(target_os = "windows")]
 fn run_overlay_test() -> Result<(), String> {
-    let overlay = crate::platform::win_overlay::WinOverlay::create()
+    let mut overlay = crate::platform::win_overlay::WinOverlay::create()
         .ok_or("overlay not available")?
         .map_err(|e| format!("create: {e}"))?;
     overlay.show()?;
