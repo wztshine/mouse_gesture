@@ -8,6 +8,7 @@ use x11rb::{connect, protocol::Event};
 use crate::config::Config;
 use crate::gesture::GestureTracker;
 use crate::platform::{dispatch, Platform};
+use crate::platform::x11_overlay::X11Overlay;
 
 /// Right mouse button (X11 button 3).
 const RIGHT_BUTTON: u8 = 3;
@@ -124,6 +125,18 @@ impl Platform for LinuxPlatform {
     fn run(&mut self, config: &Config) -> Result<(), String> {
         self.grab_right_button()?;
 
+        let overlay = match X11Overlay::create(&self.conn, self.screen_num) {
+            Some(Ok(overlay)) => Some(overlay),
+            Some(Err(e)) => {
+                eprintln!("[mouse] trail overlay disabled: {e}");
+                None
+            }
+            None => {
+                eprintln!("[mouse] trail overlay disabled: no 32-bit visual");
+                None
+            }
+        };
+
         let mut tracker = GestureTracker::default();
         let mut tracking = false;
 
@@ -137,12 +150,27 @@ impl Platform for LinuxPlatform {
                 Event::ButtonPress(ev) if ev.detail == RIGHT_BUTTON => {
                     tracker.start(ev.root_x as f64, ev.root_y as f64);
                     tracking = true;
+                    if let Some(overlay) = &overlay {
+                        if let Err(e) = overlay.show(&self.conn) {
+                            eprintln!("[mouse] {e}");
+                        }
+                    }
                 }
                 Event::MotionNotify(ev) if tracking => {
                     tracker.add(ev.root_x as f64, ev.root_y as f64);
+                    if let Some(overlay) = &overlay {
+                        if let Err(e) = overlay.draw(&self.conn, tracker.points()) {
+                            eprintln!("[mouse] {e}");
+                        }
+                    }
                 }
                 Event::ButtonRelease(ev) if tracking && ev.detail == RIGHT_BUTTON => {
                     tracking = false;
+                    if let Some(overlay) = &overlay {
+                        if let Err(e) = overlay.hide(&self.conn) {
+                            eprintln!("[mouse] {e}");
+                        }
+                    }
                     if let Some(outcome) = tracker.finish(ev.root_x as f64, ev.root_y as f64) {
                         match dispatch(config, self, outcome) {
                             Ok(()) => {}

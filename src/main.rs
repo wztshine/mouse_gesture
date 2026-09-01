@@ -13,6 +13,8 @@ use platform::windows::WindowsPlatform;
 use crate::platform::{config_path, Platform};
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "windows")]
+    set_dpi_awareness();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(args) {
         Ok(()) => ExitCode::SUCCESS,
@@ -23,8 +25,21 @@ fn main() -> ExitCode {
     }
 }
 
+/// Make the process per-monitor DPI aware so screen metrics and pointer
+/// coordinates are both physical pixels (needed for the trail overlay).
+#[cfg(target_os = "windows")]
+fn set_dpi_awareness() {
+    use windows::Win32::UI::HiDpi::{
+        SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+}
+
 fn run(args: Vec<String>) -> Result<(), String> {
     let identify = args.iter().any(|a| a == "--identify" || a == "identify");
+    let overlay_test = args.iter().any(|a| a == "--overlay-test");
 
     #[cfg(target_os = "linux")]
     let mut platform = LinuxPlatform::new()?;
@@ -41,6 +56,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
     }
 
+    if overlay_test {
+        return run_overlay_test();
+    }
+
     let path = config_path()?;
     let config = config::Config::load(&path)?;
     eprintln!(
@@ -48,6 +67,42 @@ fn run(args: Vec<String>) -> Result<(), String> {
         count_rules(&config)
     );
     platform.run(&config)
+}
+
+/// Draw a temporary sine curve trail for a few seconds so the overlay can be
+/// verified independently of gesture capture.
+#[cfg(target_os = "linux")]
+fn run_overlay_test() -> Result<(), String> {
+    use x11rb::connect;
+    let (conn, screen_num) = connect(None).map_err(|e| format!("connect: {e}"))?;
+    let overlay = crate::platform::x11_overlay::X11Overlay::create(&conn, screen_num)
+        .ok_or("no 32-bit visual")?
+        .map_err(|e| format!("create: {e}"))?;
+    overlay.show(&conn)?;
+    let pts: Vec<(f64, f64)> = (0..200)
+        .map(|i| (100.0 + i as f64 * 4.0, 300.0 + (i as f64).sin() * 80.0))
+        .collect();
+    overlay.draw(&conn, &pts)?;
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    overlay.hide(&conn)?;
+    Ok(())
+}
+
+/// Draw a temporary sine curve trail for a few seconds so the overlay can be
+/// verified independently of gesture capture.
+#[cfg(target_os = "windows")]
+fn run_overlay_test() -> Result<(), String> {
+    let overlay = crate::platform::win_overlay::WinOverlay::create()
+        .ok_or("overlay not available")?
+        .map_err(|e| format!("create: {e}"))?;
+    overlay.show()?;
+    let pts: Vec<(f64, f64)> = (0..200)
+        .map(|i| (100.0 + i as f64 * 4.0, 300.0 + (i as f64).sin() * 80.0))
+        .collect();
+    overlay.draw(&pts)?;
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    overlay.hide()?;
+    Ok(())
 }
 
 fn count_rules(config: &config::Config) -> usize {

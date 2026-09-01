@@ -14,9 +14,17 @@ use windows::core::PWSTR;
 use crate::config::Config;
 use crate::gesture::{GestureTracker, Outcome};
 use crate::platform::Platform;
+use crate::platform::win_overlay::WinOverlay;
 
 /// Gesture tracker state, only touched by the hook callback thread.
 static STATE: OnceLock<Mutex<GestureState>> = OnceLock::new();
+
+/// Command for the trail overlay worker thread.
+enum OverlayMsg {
+    Show,
+    Draw(Vec<(f64, f64)>),
+    Hide,
+}
 
 /// Global last known pointer position, refreshed by `MouseMove` events.
 static LAST_POS: OnceLock<Mutex<(f64, f64)>> = OnceLock::new();
@@ -137,6 +145,36 @@ impl Platform for WindowsPlatform {
             }
         });
 
+        // The trail overlay is created here on the main thread (window/GDI
+        // resources) and driven by a dedicated worker thread. The hook
+        // callback only sends cheap messages and never touches the overlay.
+        let (otx, orx) = mpsc::channel::<OverlayMsg>();
+        let overlay = match WinOverlay::create() {
+            Some(Ok(o)) => Some(o),
+            Some(Err(e)) => {
+                eprintln!("[mouse] trail overlay disabled: {e}");
+                None
+            }
+            None => {
+                eprintln!("[mouse] trail overlay disabled");
+                None
+            }
+        };
+        if let Some(overlay) = overlay {
+            std::thread::spawn(move || {
+                while let Ok(msg) = orx.recv() {
+                    let result = match msg {
+                        OverlayMsg::Show => overlay.show(),
+                        OverlayMsg::Draw(points) => overlay.draw(&points),
+                        OverlayMsg::Hide => overlay.hide(),
+                    };
+                    if let Err(e) = result {
+                        eprintln!("[mouse] {e}");
+                    }
+                }
+            });
+        }
+
         let callback = move |event: Event| -> Option<Event> {
             let mut state = STATE
                 .get_or_init(|| Mutex::new(GestureState::default()))
@@ -153,11 +191,13 @@ impl Platform for WindowsPlatform {
                     };
                     state.tracker.start(x, y);
                     state.tracking = true;
+                    let _ = otx.send(OverlayMsg::Show);
                     None // swallow the press so the context menu does not open
                 }
                 EventType::MouseMove { x, y } if state.tracking => {
                     update_pos(x, y);
                     state.tracker.add(x, y);
+                    let _ = otx.send(OverlayMsg::Draw(state.tracker.points().to_vec()));
                     Some(event) // pass through so the cursor can still move
                 }
                 EventType::MouseMove { x, y } => {
@@ -173,6 +213,7 @@ impl Platform for WindowsPlatform {
                         return Some(event);
                     }
                     state.tracking = false;
+                    let _ = otx.send(OverlayMsg::Hide);
                     let Some((x, y)) = last_pos() else {
                         return None;
                     };

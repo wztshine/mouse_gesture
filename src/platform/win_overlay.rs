@@ -1,0 +1,285 @@
+use std::ptr::null_mut;
+
+use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    CreateCompatibleDC, CreateDIBSection, CreatePen, Polyline, SelectObject, SetBkMode,
+    AC_SRC_ALPHA, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBRUSH,
+    HDC, HGDIOBJ, PEN_STYLE, RGBQUAD,
+};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, GetSystemMetrics, RegisterClassW, SetWindowPos, ShowWindow,
+    HWND_TOPMOST, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    SW_HIDE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
+    ULW_ALPHA, UpdateLayeredWindow, WINDOW_EX_STYLE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
+};
+
+/// Trail color as a COLORREF (0x00BBGGRR), fully opaque green.
+const TRAIL_COLOR: u32 = 0x0000_FF00;
+/// Trail line width in pixels.
+const LINE_WIDTH: i32 = 3;
+
+/// Layered fullscreen overlay that renders the gesture trail on Windows.
+///
+/// Owns a topmost layered window backed by a 32-bit DIB section. The trail is
+/// drawn into the DIB with GDI, then the alpha channel is fixed up and the
+/// result is pushed to the screen via `UpdateLayeredWindow` on each update.
+pub struct WinOverlay {
+    hwnd: HWND,
+    mem_dc: HDC,
+    bits: *mut u32,
+    width: i32,
+    height: i32,
+    offset_x: i32,
+    offset_y: i32,
+}
+
+/// WinOverlay holds raw window handles and a DIB pointer. It is only ever
+/// touched from the hook callback thread, which serializes all access.
+unsafe impl Send for WinOverlay {}
+
+/// Window procedure: hand everything to the default handler.
+unsafe extern "system" fn wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+impl WinOverlay {
+    /// Create the overlay window covering the primary screen.
+    ///
+    /// :return: The overlay, or None when window creation fails.
+    pub fn create() -> Option<Result<WinOverlay, String>> {
+        Some(create_inner())
+    }
+
+    /// Show the overlay (no activation) and keep it on top.
+    pub fn show(&self) -> Result<(), String> {
+        // Clear any leftover trail from the previous gesture so it does not
+        // reappear when the window is shown again.
+        let n = (self.width * self.height) as usize;
+        unsafe {
+            std::ptr::write_bytes(self.bits, 0, n);
+        }
+        self.push()
+            .map_err(|e| format!("failed to clear overlay: {e}"))?;
+        let _ = unsafe {
+            SetWindowPos(
+                self.hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE,
+            )
+        };
+        let _ = unsafe { ShowWindow(self.hwnd, SW_SHOWNOACTIVATE) };
+        Ok(())
+    }
+
+    /// Redraw the overlay with the given trail points.
+    pub fn draw(&self, points: &[(f64, f64)]) -> Result<(), String> {
+        // Clear to fully transparent (alpha = 0).
+        let n = (self.width * self.height) as usize;
+        unsafe {
+            std::ptr::write_bytes(self.bits, 0, n);
+        }
+
+        if points.len() >= 2 {
+            let pts: Vec<windows::Win32::Foundation::POINT> = points
+                .iter()
+                .map(|&(x, y)| windows::Win32::Foundation::POINT {
+                    x: x as i32 - self.offset_x,
+                    y: y as i32 - self.offset_y,
+                })
+                .collect();
+            let ok = unsafe { Polyline(self.mem_dc, &pts) };
+            if !ok.as_bool() {
+                return Err("failed to draw trail".into());
+            }
+            // GDI leaves the alpha channel at 0; mark drawn pixels opaque so
+            // they become visible through UpdateLayeredWindow. Only the
+            // bounding box of the trail is scanned to keep this cheap.
+            let min_x = pts.iter().map(|p| p.x).min().unwrap_or(0).max(0);
+            let min_y = pts.iter().map(|p| p.y).min().unwrap_or(0).max(0);
+            let max_x = pts.iter().map(|p| p.x).max().unwrap_or(0).min(self.width - 1);
+            let max_y = pts.iter().map(|p| p.y).max().unwrap_or(0).min(self.height - 1);
+            let row_len = self.width as usize;
+            unsafe {
+                for y in min_y..=max_y {
+                    let base = (y as usize) * row_len;
+                    for x in min_x..=max_x {
+                        let i = base + x as usize;
+                        let px = *self.bits.add(i);
+                        if px & 0x00FF_FFFF != 0 {
+                            *self.bits.add(i) = px | 0xFF00_0000;
+                        }
+                    }
+                }
+            }
+        }
+
+        self.push().map_err(|e| format!("failed to update overlay: {e}"))
+    }
+
+    /// Hide the overlay.
+    pub fn hide(&self) -> Result<(), String> {
+        let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
+        Ok(())
+    }
+
+    /// Composite the DIB backing store into the layered window.
+    fn push(&self) -> windows::core::Result<()> {
+        let size = windows::Win32::Foundation::SIZE {
+            cx: self.width,
+            cy: self.height,
+        };
+        let pt_src = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+        let blend = BLENDFUNCTION {
+            BlendOp: 0,             // AC_SRC_OVER
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+        unsafe {
+            // pptDst = None keeps the window at its creation position.
+            UpdateLayeredWindow(
+                self.hwnd,
+                None,
+                None,
+                Some(&size),
+                Some(self.mem_dc),
+                Some(&pt_src),
+                windows::Win32::Foundation::COLORREF(0),
+                Some(&blend),
+                ULW_ALPHA,
+            )
+        }
+    }
+}
+
+fn create_inner() -> Result<WinOverlay, String> {
+    // Cover the whole virtual screen (all monitors). The mouse hook reports
+    // physical pixels; with DPI awareness set at startup the metrics below are
+    // also physical, so window geometry and pointer coordinates match.
+    let offset_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let offset_y = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+    if width <= 0 || height <= 0 {
+        return Err("invalid screen size".into());
+    }
+
+    let class_name = windows::core::w!("mouse_trail_overlay");
+    let hinstance = unsafe { GetModuleHandleW(None) }
+        .map_err(|e| format!("module: {e}"))?
+        .into();
+
+    let wc = WNDCLASSW {
+        style: Default::default(),
+        lpfnWndProc: Some(wnd_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: hinstance,
+        hIcon: Default::default(),
+        hCursor: Default::default(),
+        hbrBackground: HBRUSH(null_mut()),
+        lpszMenuName: PCWSTR::null(),
+        lpszClassName: class_name,
+    };
+    let registered = unsafe { RegisterClassW(&wc) };
+    if registered == 0 {
+        return Err("failed to register window class".into());
+    }
+
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(
+                (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0 | WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0)
+                    as u32,
+            ),
+            class_name,
+            w!(""),
+            WS_POPUP,
+            offset_x,
+            offset_y,
+            width,
+            height,
+            None,
+            None,
+            Some(hinstance),
+            None,
+        )
+    }
+    .map_err(|e| format!("create window: {e}"))?;
+    if hwnd.is_invalid() {
+        return Err("failed to create overlay window".into());
+    }
+
+    let mem_dc = unsafe { CreateCompatibleDC(None) };
+    if mem_dc.is_invalid() {
+        return Err("failed to create memory DC".into());
+    }
+
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height, // top-down
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        },
+        bmiColors: [RGBQUAD {
+            rgbBlue: 0,
+            rgbGreen: 0,
+            rgbRed: 0,
+            rgbReserved: 0,
+        }],
+    };
+    let mut bits: *mut core::ffi::c_void = null_mut();
+    let bitmap = unsafe {
+        CreateDIBSection(
+            Some(mem_dc),
+            &bmi,
+            DIB_RGB_COLORS,
+            &mut bits,
+            None,
+            0,
+        )
+    }
+    .map_err(|e| format!("create DIB: {e}"))?;
+    if bitmap.is_invalid() {
+        return Err("failed to create DIB section".into());
+    }
+
+    let _old_bitmap = unsafe { SelectObject(mem_dc, HGDIOBJ(bitmap.0)) };
+
+    let pen = unsafe { CreatePen(PEN_STYLE(0), LINE_WIDTH, windows::Win32::Foundation::COLORREF(TRAIL_COLOR)) };
+    if pen.is_invalid() {
+        return Err("failed to create pen".into());
+    }
+    let _old_pen = unsafe { SelectObject(mem_dc, HGDIOBJ(pen.0)) };
+    unsafe { SetBkMode(mem_dc, windows::Win32::Graphics::Gdi::BACKGROUND_MODE(1)) }; // TRANSPARENT
+
+    Ok(WinOverlay {
+        hwnd,
+        mem_dc,
+        bits: bits as *mut u32,
+        width,
+        height,
+        offset_x,
+        offset_y,
+    })
+}
