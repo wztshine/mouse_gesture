@@ -4,6 +4,10 @@ const CLICK_THRESHOLD_PX: f64 = 10.0;
 /// Minimum accumulated displacement (px) before a new direction segment is emitted.
 const SEGMENT_THRESHOLD_PX: f64 = 30.0;
 
+/// Direction segments shorter than this (px) are treated as jitter and dropped
+/// when composing the final gesture string, keeping diagonals clean.
+const MIN_SEGMENT_LEN_PX: f64 = 60.0;
+
 /// The eight directions used for gesture quantization, in clockwise order.
 const DIRECTIONS: [&str; 8] = ["R", "DR", "D", "DL", "L", "UL", "U", "UR"];
 
@@ -18,6 +22,7 @@ pub struct GestureTracker {
     acc_x: f64,
     acc_y: f64,
     dirs: Vec<usize>,
+    seg_lens: Vec<f64>,
 }
 
 /// Outcome of a finished gesture.
@@ -37,6 +42,7 @@ impl GestureTracker {
         self.acc_x = 0.0;
         self.acc_y = 0.0;
         self.dirs.clear();
+        self.seg_lens.clear();
     }
 
     /// Feed a new pointer position while the button is held.
@@ -51,8 +57,17 @@ impl GestureTracker {
         let dist = (self.acc_x * self.acc_x + self.acc_y * self.acc_y).sqrt();
         if dist >= SEGMENT_THRESHOLD_PX {
             let dir = direction_index(self.acc_x, self.acc_y);
-            if self.dirs.last() != Some(&dir) {
-                self.dirs.push(dir);
+            match self.dirs.last() {
+                // Extend the current segment when the direction is unchanged.
+                Some(&last) if last == dir => {
+                    if let Some(len) = self.seg_lens.last_mut() {
+                        *len += dist;
+                    }
+                }
+                _ => {
+                    self.dirs.push(dir);
+                    self.seg_lens.push(dist);
+                }
             }
             self.acc_x = 0.0;
             self.acc_y = 0.0;
@@ -72,7 +87,14 @@ impl GestureTracker {
             return Some(Outcome::Click);
         }
 
-        let dirs = self.dirs.clone();
+        // Drop short segments: they are jitter, not real direction changes.
+        let mut dirs: Vec<usize> = Vec::new();
+        for (i, &d) in self.dirs.iter().enumerate() {
+            if self.seg_lens.get(i).copied().unwrap_or(0.0) >= MIN_SEGMENT_LEN_PX {
+                dirs.push(d);
+            }
+        }
+
         if dirs.is_empty() {
             return Some(Outcome::Gesture(direction_str(dx, dy).to_string()));
         }
@@ -141,5 +163,16 @@ mod tests {
         t.add(40.0, 0.0);
         t.add(70.0, 0.0);
         assert_eq!(t.finish(100.0, 0.0), Some(Outcome::Gesture("R".into())));
+    }
+
+    #[test]
+    fn short_jitter_on_diagonal_is_dropped() {
+        // Drawing down-right, but a small initial downward nudge produces a
+        // short "D" segment. The short segment is jitter and must be dropped.
+        let mut t = GestureTracker::default();
+        t.start(0.0, 0.0);
+        t.add(5.0, 50.0); // short downward nudge -> short "D" segment
+        t.add(150.0, 155.0); // down-right, dominant direction
+        assert_eq!(t.finish(200.0, 205.0), Some(Outcome::Gesture("DR".into())));
     }
 }
