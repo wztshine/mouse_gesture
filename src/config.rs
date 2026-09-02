@@ -53,10 +53,10 @@ impl Config {
                     last_modified = now;
                     match Config::load(&path) {
                         Ok(config) => {
-                            if let Some(shared) = SHARED.get() {
-                                if let Ok(mut guard) = shared.write() {
-                                    *guard = config;
-                                }
+                            if let Some(shared) = SHARED.get()
+                                && let Ok(mut guard) = shared.write()
+                            {
+                                *guard = config;
                             }
                             eprintln!("[mouse] config reloaded");
                         }
