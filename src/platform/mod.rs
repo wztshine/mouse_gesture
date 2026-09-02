@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use crate::config::Config;
 use crate::gesture::Outcome;
 
 #[cfg(target_os = "linux")]
@@ -24,20 +23,19 @@ pub trait Platform {
 
     /// Run the gesture capture loop. Blocks until an error occurs.
     ///
-    /// :param config: Loaded gesture configuration.
     /// :return: Error message when the capture loop exits.
-    fn run(&mut self, config: &Config) -> Result<(), String>;
+    fn run(&mut self) -> Result<(), String>;
 }
 
-/// Dispatch a recognized gesture outcome using the shared config.
-pub fn dispatch(config: &Config, platform: &mut dyn Platform, outcome: Outcome) -> Result<(), String> {
+/// Dispatch a recognized gesture outcome using the shared live config.
+pub fn dispatch(platform: &mut dyn Platform, outcome: Outcome) -> Result<(), String> {
     match outcome {
         Outcome::Click => platform.replay_right_click(),
         Outcome::Gesture(gesture) => {
             let app = platform.foreground_app();
-            if let Some(keys) = config.lookup(app.as_deref(), &gesture) {
+            if let Some(keys) = crate::config::Config::lookup_current(app.as_deref(), &gesture) {
                 eprintln!("[mouse] app={app:?} gesture={gesture} -> {keys:?}");
-                crate::action::press_keys(keys)
+                crate::action::press_keys(&keys)
             } else {
                 eprintln!("[mouse] app={app:?} gesture={gesture} (no rule)");
                 Ok(())

@@ -17,7 +17,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PWSTR;
 
-use crate::config::Config;
 use crate::gesture::{GestureTracker, Outcome};
 use crate::platform::Platform;
 #[cfg(feature = "trail")]
@@ -137,9 +136,7 @@ impl Platform for WindowsPlatform {
         crate::action::click_right()
     }
 
-    fn run(&mut self, config: &Config) -> Result<(), String> {
-        let config = config.clone();
-
+    fn run(&mut self) -> Result<(), String> {
         // Heavy work (foreground lookup, key injection) is moved to a worker
         // thread so the low-level hook callback stays fast and the system
         // input pipeline never blocks behind it.
@@ -147,7 +144,7 @@ impl Platform for WindowsPlatform {
         std::thread::spawn(move || {
             let mut platform = WindowsPlatform;
             while let Ok(outcome) = rx.recv() {
-                if let Err(e) = crate::platform::dispatch(&config, &mut platform, outcome) {
+                if let Err(e) = crate::platform::dispatch(&mut platform, outcome) {
                     eprintln!("[mouse] error: {e}");
                 }
             }
