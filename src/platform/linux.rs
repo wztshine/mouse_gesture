@@ -152,29 +152,26 @@ impl Platform for LinuxPlatform {
                     tracker.start(ev.root_x as f64, ev.root_y as f64);
                     tracking = true;
                     #[cfg(feature = "trail")]
-                    if let Some(overlay) = &overlay {
-                        if let Err(e) = overlay.show(&self.conn) {
+                    if let Some(overlay) = &overlay
+                        && let Err(e) = overlay.show(&self.conn) {
                             eprintln!("[mouse] {e}");
                         }
-                    }
                 }
                 Event::MotionNotify(ev) if tracking => {
                     tracker.add(ev.root_x as f64, ev.root_y as f64);
                     #[cfg(feature = "trail")]
-                    if let Some(overlay) = &overlay {
-                        if let Err(e) = overlay.draw(&self.conn, tracker.points()) {
+                    if let Some(overlay) = &overlay
+                        && let Err(e) = overlay.draw(&self.conn, tracker.points()) {
                             eprintln!("[mouse] {e}");
                         }
-                    }
                 }
                 Event::ButtonRelease(ev) if tracking && ev.detail == RIGHT_BUTTON => {
                     tracking = false;
                     #[cfg(feature = "trail")]
-                    if let Some(overlay) = &overlay {
-                        if let Err(e) = overlay.hide(&self.conn) {
+                    if let Some(overlay) = &overlay
+                        && let Err(e) = overlay.hide(&self.conn) {
                             eprintln!("[mouse] {e}");
                         }
-                    }
                     if let Some(outcome) = tracker.finish(ev.root_x as f64, ev.root_y as f64) {
                         match dispatch(self, outcome) {
                             Ok(()) => {}
