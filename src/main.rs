@@ -1,3 +1,8 @@
+// Compile as a GUI-subsystem app on Windows so double-clicking the binary
+// does not open a console window. When run from a terminal the console is
+// re-attached at startup so log output still appears.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use std::process::ExitCode;
 
 mod action;
@@ -13,6 +18,8 @@ use platform::windows::WindowsPlatform;
 use crate::platform::{config_path, Platform};
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "windows")]
+    attach_to_parent_console();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(args) {
         Ok(()) => ExitCode::SUCCESS,
@@ -20,6 +27,18 @@ fn main() -> ExitCode {
             eprintln!("[mouse] {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Attach to the parent console when launched from a terminal. When launched
+/// by double-clicking there is no parent console and this is a no-op, leaving
+/// the program windowless. Rust's stdout/stderr obtain their handles lazily,
+/// so attaching before the first print routes log output to the console.
+#[cfg(target_os = "windows")]
+fn attach_to_parent_console() {
+    use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+    unsafe {
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
     }
 }
 
