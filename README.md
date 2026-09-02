@@ -44,9 +44,22 @@ mouse
 
 ## 构建
 
+轨迹渲染是可选功能（`trail` feature）。**默认关闭**：编译出的版本不带轨迹，等同于基础手势工具；开启后增加轨迹叠加层。
+
 ```
+# 基础版（无轨迹）
+cargo build --release
 cargo build --release --target x86_64-pc-windows-gnu   # Windows
-cargo build --release                                  # Linux (X11)
+
+# 带轨迹版（开启 trail feature）
+cargo build --release --features trail
+cargo build --release --features trail --target x86_64-pc-windows-gnu   # Windows
+```
+
+带轨迹的版本可用 `--overlay-test` 验证轨迹是否正常工作：
+
+```
+mouse --overlay-test
 ```
 
 ## 已知限制
