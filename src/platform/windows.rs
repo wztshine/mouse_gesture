@@ -9,7 +9,7 @@ use windows::Win32::System::Threading::{
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowThreadProcessId,
+    GetCursorPos, GetForegroundWindow, GetWindowThreadProcessId,
 };
 #[cfg(feature = "trail")]
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -63,6 +63,18 @@ fn last_pos() -> Option<(f64, f64)> {
 fn update_pos(x: f64, y: f64) {
     if let Ok(mut guard) = LAST_POS.get_or_init(|| Mutex::new((0.0, 0.0))).lock() {
         *guard = (x, y);
+    }
+}
+
+/// Seed LAST_POS with the real cursor position at startup, so a right-click
+/// performed before any mouse move is tracked from a correct origin instead
+/// of the default (0, 0).
+fn init_last_pos() {
+    if let Ok(mut guard) = LAST_POS.get_or_init(|| Mutex::new((0.0, 0.0))).lock() {
+        let mut point = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&raw mut point) }.is_ok() {
+            *guard = (point.x as f64, point.y as f64);
+        }
     }
 }
 
@@ -137,6 +149,10 @@ impl Platform for WindowsPlatform {
     }
 
     fn run(&mut self) -> Result<(), String> {
+        // Seed the pointer cache with the real cursor position so a gesture
+        // started before any mouse move uses a correct origin.
+        init_last_pos();
+
         // Heavy work (foreground lookup, key injection) is moved to a worker
         // thread so the low-level hook callback stays fast and the system
         // input pipeline never blocks behind it.
@@ -207,10 +223,11 @@ impl Platform for WindowsPlatform {
                     if let Some(outcome) = state.tracker.finish(x, y) {
                         if let Outcome::Click = outcome {
                             // Replay a synthetic click; set skip for its press+release.
+                            // Accumulate so overlapping replays are not lost.
                             *REPLAY_SKIP
                                 .get_or_init(|| Mutex::new(0))
                                 .lock()
-                                .unwrap_or_else(|e| e.into_inner()) = 2;
+                                .unwrap_or_else(|e| e.into_inner()) += 2;
                         }
                         let _ = tx.send(outcome);
                     }

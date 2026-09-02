@@ -15,10 +15,17 @@ pub fn press_keys(keys: &[String]) -> Result<(), String> {
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to create input simulator: {e}"))?;
 
+    let mut pressed: Vec<Key> = Vec::new();
     for &key in &parsed {
-        enigo
-            .key(key, Direction::Press)
-            .map_err(|e| format!("failed to press {key:?}: {e}"))?;
+        if let Err(e) = enigo.key(key, Direction::Press) {
+            // Best-effort release so a partial failure never leaves a
+            // modifier stuck down on the system.
+            for &held in pressed.iter().rev() {
+                let _ = enigo.key(held, Direction::Release);
+            }
+            return Err(format!("failed to press {key:?}: {e}"));
+        }
+        pressed.push(key);
     }
     for &key in parsed.iter().rev() {
         enigo
