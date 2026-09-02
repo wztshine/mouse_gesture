@@ -8,16 +8,12 @@
 # 未匹配到应用时回退到 [default]。
 
 [default]
-# 右滑 → 打开终端
-"DR" = ["ctrl", "w"]
-# 左滑 → 返回上一页
 "L" = ["alt", "left"]
-# 右滑 前进
 "R" = ["alt", "right"]
-# 上滑 → 关闭标签页
-"U" = ["ctrl", "w"]
-# 右再上 → 新建标签页
-"R,U" = ["ctrl", "t"]
+"U" = ["home"]
+"D" = ["end"]
+"DR" = ["ctrl", "w"]
+"UL" = ["ctrl", "shift", "t"]
 
 [app."firefox_firefox"]
 # firefox：左滑 → 返回，右滑 → 前进
