@@ -25,7 +25,9 @@ use crate::platform::win_overlay::WinOverlay;
 /// Gesture tracker state, only touched by the hook callback thread.
 static STATE: OnceLock<Mutex<GestureState>> = OnceLock::new();
 
-/// Command for the trail overlay worker thread.
+/// Command for the trail overlay worker thread. The overlay window stays
+/// visible permanently; "Show"/"Hide" mean start/end of a gesture (paint the
+/// trail / clear it back to transparent), not window show/hide.
 #[cfg(feature = "trail")]
 enum OverlayMsg {
     Show,
@@ -262,6 +264,15 @@ fn overlay_thread(rx: mpsc::Receiver<OverlayMsg>) {
             return;
         }
     };
+
+    // Show the window once and keep it visible (transparent) for the lifetime
+    // of the process. Per-gesture Show/Hide only paint/clear the trail instead
+    // of toggling window visibility, which avoids Win10 layered-window
+    // update failures caused by repeated show/hide cycles.
+    if let Err(e) = overlay.show() {
+        eprintln!("[mouse] failed to show overlay: {e}");
+        return;
+    }
 
     // Pump window messages (required for the layered window to behave) while
     // waiting for and coalescing overlay commands.

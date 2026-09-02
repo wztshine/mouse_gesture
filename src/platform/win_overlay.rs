@@ -11,9 +11,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetSystemMetrics, RegisterClassW, SetWindowPos, ShowWindow,
     HWND_TOPMOST, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-    SW_HIDE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
-    ULW_ALPHA, UpdateLayeredWindow, WINDOW_EX_STYLE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, ULW_ALPHA,
+    UpdateLayeredWindow, WINDOW_EX_STYLE, WNDCLASSW, WM_NCHITTEST, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 /// Trail color as a COLORREF (0x00BBGGRR), fully opaque green.
@@ -23,9 +23,13 @@ const LINE_WIDTH: i32 = 3;
 
 /// Layered fullscreen overlay that renders the gesture trail on Windows.
 ///
-/// Owns a topmost layered window backed by a 32-bit DIB section. The trail is
-/// drawn into the DIB with GDI, then the alpha channel is fixed up and the
-/// result is pushed to the screen via `UpdateLayeredWindow` on each update.
+/// Owns a topmost layered window backed by a 32-bit DIB section. The window is
+/// shown once and kept permanently visible; each gesture paints the trail into
+/// the DIB with GDI and pushes it to the screen via `UpdateLayeredWindow`, and
+/// on gesture end the pixels are cleared back to transparent. The window is
+/// never hidden between gestures: Win10 can fail to composite a layered
+/// window that is repeatedly hidden and re-shown, leaving the trail invisible
+/// even though `UpdateLayeredWindow` reports success.
 pub struct WinOverlay {
     hwnd: HWND,
     mem_dc: HDC,
@@ -42,13 +46,18 @@ pub struct WinOverlay {
 unsafe impl Send for WinOverlay {}
 unsafe impl Sync for WinOverlay {}
 
-/// Window procedure: hand everything to the default handler.
+/// Window procedure: hand everything to the default handler. Hit testing
+/// always reports transparent so the always-visible overlay never intercepts
+/// mouse input (clicks must fall through to the window underneath).
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if msg == WM_NCHITTEST {
+        return LRESULT(-1); // HTTRANSPARENT
+    }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
@@ -60,10 +69,10 @@ impl WinOverlay {
         Some(create_inner())
     }
 
-    /// Show the overlay (no activation) and keep it on top.
+    /// Begin a gesture: clear any leftover trail and (re-)assert the topmost
+    /// Z-order so the trail paints above the active window.
     pub fn show(&self) -> Result<(), String> {
-        // Clear any leftover trail from the previous gesture so it does not
-        // reappear when the window is shown again.
+        // Clear any leftover trail from the previous gesture.
         let n = (self.width * self.height) as usize;
         unsafe {
             std::ptr::write_bytes(self.bits, 0, n);
@@ -121,12 +130,16 @@ impl WinOverlay {
         self.push().map_err(|e| format!("failed to update overlay: {e}"))
     }
 
-    /// Hide the overlay.
+    /// Hide the overlay. The window itself stays visible (it is shown once at
+    /// startup and never hidden, to avoid Win10 layered-window update quirks
+    /// from repeated show/hide cycles); "hiding" just clears the trail pixels
+    /// back to transparent.
     pub fn hide(&mut self) -> Result<(), String> {
         if let Some((px, py, pw, ph)) = self.prev_bbox.take() {
             self.zero_region(px, py, pw, ph);
+            self.push()
+                .map_err(|e| format!("failed to clear overlay: {e}"))?;
         }
-        let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
         Ok(())
     }
 
