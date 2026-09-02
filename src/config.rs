@@ -50,9 +50,9 @@ impl Config {
                 std::thread::sleep(interval);
                 let now = modified_time(&path);
                 if now.is_some() && now != last_modified {
-                    last_modified = now;
                     match Config::load(&path) {
                         Ok(config) => {
+                            last_modified = now;
                             if let Some(shared) = SHARED.get()
                                 && let Ok(mut guard) = shared.write()
                             {
@@ -60,6 +60,9 @@ impl Config {
                             }
                             eprintln!("[mouse] config reloaded");
                         }
+                        // Keep last_modified unchanged so a parse failure during
+                        // a mid-write read is retried on the next poll instead
+                        // of being skipped forever.
                         Err(e) => eprintln!("[mouse] config reload failed: {e}"),
                     }
                 }
@@ -74,7 +77,9 @@ impl Config {
     /// :param gesture: Gesture direction string, e.g. "R,U".
     /// :return: The key combination, or None when no rule matches.
     pub fn lookup_current(app: Option<&str>, gesture: &str) -> Option<Vec<String>> {
-        let guard = SHARED.get()?.read().ok()?;
+        // Poisoned lock -> fall back to the last good value rather than
+        // silently disabling all gestures.
+        let guard = SHARED.get()?.read().unwrap_or_else(|e| e.into_inner());
         guard.lookup(app, gesture).map(|k| k.to_vec())
     }
 
