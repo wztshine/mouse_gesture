@@ -5,7 +5,6 @@ use x11rb::protocol::xproto::{
 use x11rb::rust_connection::RustConnection;
 use x11rb::{connect, protocol::Event};
 
-use crate::config::Config;
 use crate::gesture::GestureTracker;
 use crate::platform::{dispatch, Platform};
 
@@ -121,7 +120,7 @@ impl Platform for LinuxPlatform {
         result
     }
 
-    fn run(&mut self, config: &Config) -> Result<(), String> {
+    fn run(&mut self) -> Result<(), String> {
         self.grab_right_button()?;
 
         let mut tracker = GestureTracker::default();
@@ -144,7 +143,7 @@ impl Platform for LinuxPlatform {
                 Event::ButtonRelease(ev) if tracking && ev.detail == RIGHT_BUTTON => {
                     tracking = false;
                     if let Some(outcome) = tracker.finish(ev.root_x as f64, ev.root_y as f64) {
-                        match dispatch(config, self, outcome) {
+                        match dispatch(self, outcome) {
                             Ok(()) => {}
                             Err(e) => eprintln!("[mouse] error: {e}"),
                         }

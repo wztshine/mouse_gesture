@@ -61,12 +61,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
     }
 
     let path = config_path()?;
-    let config = config::Config::load(&path)?;
+    let config = config::Config::init_shared(&path)?;
+    // Reload the config every 5 seconds when the file changes, so edits take
+    // effect without restarting the program.
+    config::Config::watch(path.clone(), std::time::Duration::from_secs(5));
     eprintln!(
-        "[mouse] loaded {} rules, listening for gestures",
+        "[mouse] loaded {} rules, listening for gestures (config auto-reload: 5s)",
         count_rules(&config)
     );
-    platform.run(&config)
+    platform.run()
 }
 
 fn count_rules(config: &config::Config) -> usize {
