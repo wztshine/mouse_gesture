@@ -6,6 +6,19 @@
 #
 # 按应用分组：`[app."名称"]`，名称用 `--identify` 模式查看。
 # 未匹配到应用时回退到 [default]。
+#
+# 按键名（不区分大小写）：
+#   修饰键    ctrl/control  alt  shift  meta/win/super
+#   编辑控制  tab  enter/return  esc/escape  space  backspace  delete/del
+#   导航      home  end  pageup  pagedown
+#             up/arrowup  down/arrowdown  left/arrowleft  right/arrowright
+#   功能键    f1 ~ f12
+#   单字符    任意单个字符，如 a、1、/、-
+#
+# 一个动作可写多个按键：连续的修饰键与紧随其后的普通键组成一次按键；
+# 出现第二个普通键时表示接着再按一次，两段之间会短暂停顿。
+# 例：["ctrl", "space"] 表示 Ctrl+空格；["f5"] 表示 F5；
+#     ["alt", "space", "n"] 表示先 Alt+空格，再单独按 n。
 
 [default]
 "L" = ["alt", "left"]
@@ -14,6 +27,7 @@
 "D" = ["end"]
 "DR" = ["ctrl", "w"]
 "UL" = ["ctrl", "shift", "t"]
+"DL" = ["win", "h"]
 
 [app."Gnome-terminal"]
 "DR" = ["ctrl", "shift", "w"]
