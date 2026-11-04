@@ -42,6 +42,13 @@ mouse --identify
 mouse
 ```
 
+## 托盘与退出
+
+启动后会出现一个托盘图标（tooltip 为 `mouse`），菜单只有 **Quit**，点击即退出程序并释放全局抓取。没有托盘环境时仍可在终端用 `Ctrl+C` 退出。
+
+- **Linux**：托盘通过 D-Bus StatusNotifierItem 注册，需要桌面提供 StatusNotifier 宿主。KDE 原生支持；GNOME 需安装 AppIndicator 扩展。
+- **Windows**：图标位于任务栏通知区域。
+
 ## 构建
 
 轨迹渲染是可选功能（`trail` feature）。**默认关闭**：编译出的版本不带轨迹，等同于基础手势工具；开启后增加轨迹叠加层。

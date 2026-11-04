@@ -9,6 +9,7 @@ mod action;
 mod config;
 mod gesture;
 mod platform;
+mod tray;
 
 #[cfg(target_os = "linux")]
 use platform::linux::LinuxPlatform;
@@ -90,7 +91,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "[mouse] loaded {} rules, listening for gestures (config auto-reload: 5s)",
         count_rules(&config)
     );
-    platform.run()
+
+    let tray = tray::Tray::start(platform.quit_handle());
+    if tray.is_none() {
+        eprintln!("[mouse] tray icon unavailable");
+    }
+
+    let result = platform.run();
+    drop(tray);
+    result
 }
 
 /// Draw a temporary sine curve trail for a few seconds so the overlay can be

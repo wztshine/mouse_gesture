@@ -4,7 +4,7 @@
 #   R  右        DR  右下      D  下        DL  左下
 #   L  左        UL  左上      U  上        UR  右上
 #
-# 按应用分组：`[app.<名称>]`，名称用 `--identify` 模式查看。
+# 按应用分组：`[app."名称"]`，名称用 `--identify` 模式查看。
 # 未匹配到应用时回退到 [default]。
 
 [default]
@@ -15,28 +15,5 @@
 "DR" = ["ctrl", "w"]
 "UL" = ["ctrl", "shift", "t"]
 
-[app."firefox_firefox"]
-# firefox：左滑 → 返回，右滑 → 前进
-"L" = ["alt", "left"]
-"R" = ["alt", "right"]
-# 左上 → 打开最近关闭的标签
-"UL" = ["ctrl", "shift", "t"]
-# 右下 → 关闭当前标签
-"DR" = ["ctrl", "w"]
-# 上滑 → 滚动到顶部
-"U" = ["home"]
-# 下滑 → 滚动到底部
-"D" = ["end"]
-
-[app."Google-chrome"]
-# chrome：左滑 → 返回，右滑 → 前进
-"L" = ["alt", "left"]
-"R" = ["alt", "right"]
-# 左上 → 打开最近关闭的标签
-"UL" = ["ctrl", "shift", "t"]
-# 右下 → 关闭当前标签
-"DR" = ["ctrl", "w"]
-# 上滑 → 滚动到顶部
-"U" = ["home"]
-# 下滑 → 滚动到底部
-"D" = ["end"]
+[app."Gnome-terminal"]
+"DR" = ["ctrl", "shift", "w"]

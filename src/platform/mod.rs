@@ -11,6 +11,11 @@ pub mod win_overlay;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
+#[cfg(target_os = "linux")]
+pub use linux::QuitHandle;
+#[cfg(target_os = "windows")]
+pub use windows::QuitHandle;
+
 /// Platform-specific behavior: global input capture and foreground window info.
 pub trait Platform {
     /// Identifier of the currently focused application
@@ -21,7 +26,11 @@ pub trait Platform {
     /// works after the platform swallowed the original press.
     fn replay_right_click(&mut self) -> Result<(), String>;
 
-    /// Run the gesture capture loop. Blocks until an error occurs.
+    /// Handle that wakes the run loop and asks it to shut down.
+    fn quit_handle(&self) -> QuitHandle;
+
+    /// Run the gesture capture loop. Blocks until an error occurs or a quit is
+    /// requested through [`Platform::quit_handle`].
     ///
     /// :return: Error message when the capture loop exits.
     fn run(&mut self) -> Result<(), String>;

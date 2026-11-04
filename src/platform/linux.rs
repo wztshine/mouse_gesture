@@ -1,9 +1,10 @@
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    AtomEnum, ButtonIndex, ConnectionExt as _, EventMask, GrabMode, ModMask, Window,
+    Atom, AtomEnum, ButtonIndex, ClientMessageEvent, ConnectionExt as _, CreateWindowAux,
+    EventMask, GrabMode, ModMask, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
-use x11rb::{connect, protocol::Event};
+use x11rb::{COPY_FROM_PARENT, connect, protocol::Event};
 
 use crate::gesture::GestureTracker;
 use crate::platform::{dispatch, Platform};
@@ -16,20 +17,89 @@ const RIGHT_BUTTON: u8 = 3;
 const RIGHT_BUTTON_INDEX: ButtonIndex = ButtonIndex::M3;
 /// X11 `NONE` atom/window id.
 const NONE: u32 = 0;
+/// Atom of the client message that wakes the loop on quit.
+const QUIT_ATOM_NAME: &[u8] = b"_MOUSE_QUIT";
+/// Size of the unmapped window that receives the quit message.
+const QUIT_WINDOW_SIZE: u16 = 1;
 
 /// X11 connection together with the screen index for its root window.
 pub struct LinuxPlatform {
     conn: RustConnection,
     screen_num: usize,
+    /// Unmapped window used to wake `run` when the tray asks to quit.
+    quit_window: Window,
+    quit_atom: Atom,
+}
+
+/// Asks the `wait_for_event` loop to exit.
+///
+/// Safe to call from another thread: it opens a short-lived connection and
+/// sends a client message to the window owned by the event loop.
+#[derive(Clone, Copy)]
+pub struct QuitHandle {
+    window: Window,
+    atom: Atom,
+}
+
+impl QuitHandle {
+    pub fn request(self) {
+        let Ok((conn, _)) = connect(None) else {
+            eprintln!("[mouse] quit: failed to connect to X server");
+            return;
+        };
+        let event = ClientMessageEvent::new(32, self.window, self.atom, [0u32; 5]);
+        // Check the request synchronously: the temporary connection is closed
+        // right after this call, and closing it before the server has processed
+        // the send would occasionally drop the event.
+        let sent = conn
+            .send_event(false, self.window, EventMask::NO_EVENT, event)
+            .map_err(|e| e.to_string())
+            .and_then(|cookie| cookie.check().map_err(|e| e.to_string()));
+        if let Err(e) = sent {
+            eprintln!("[mouse] quit: failed to send quit event: {e}");
+        }
+    }
 }
 
 impl LinuxPlatform {
     pub fn new() -> Result<LinuxPlatform, String> {
         let (conn, screen_num) = connect(None)
             .map_err(|e| format!("failed to connect to X server: {e}"))?;
-        Ok(LinuxPlatform { conn, screen_num })
-    }
 
+        let root = conn.setup().roots[screen_num].root;
+        let quit_atom = conn
+            .intern_atom(false, QUIT_ATOM_NAME)
+            .map_err(|e| format!("failed to intern quit atom: {e}"))?
+            .reply()
+            .map_err(|e| format!("failed to intern quit atom: {e}"))?
+            .atom;
+        let quit_window = conn
+            .generate_id()
+            .map_err(|e| format!("failed to allocate quit window: {e}"))?;
+        conn.create_window(
+            0,
+            quit_window,
+            root,
+            0,
+            0,
+            QUIT_WINDOW_SIZE,
+            QUIT_WINDOW_SIZE,
+            0,
+            WindowClass::INPUT_ONLY,
+            COPY_FROM_PARENT,
+            &CreateWindowAux::new().event_mask(EventMask::NO_EVENT),
+        )
+        .map_err(|e| format!("failed to create quit window: {e}"))?
+        .check()
+        .map_err(|e| format!("failed to create quit window: {e}"))?;
+
+        Ok(LinuxPlatform {
+            conn,
+            screen_num,
+            quit_window,
+            quit_atom,
+        })
+    }
     fn root(&self) -> Window {
         self.conn.setup().roots[self.screen_num].root
     }
@@ -122,6 +192,13 @@ impl Platform for LinuxPlatform {
         result
     }
 
+    fn quit_handle(&self) -> QuitHandle {
+        QuitHandle {
+            window: self.quit_window,
+            atom: self.quit_atom,
+        }
+    }
+
     fn run(&mut self) -> Result<(), String> {
         self.grab_right_button()?;
 
@@ -179,8 +256,16 @@ impl Platform for LinuxPlatform {
                         }
                     }
                 }
+                Event::ClientMessage(ev)
+                    if ev.window == self.quit_window && ev.type_ == self.quit_atom =>
+                {
+                    break;
+                }
                 _ => {}
             }
         }
+
+        self.ungrab_right_button()?;
+        Ok(())
     }
 }

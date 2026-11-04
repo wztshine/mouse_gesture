@@ -3,18 +3,17 @@ use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 
 use rdev::{grab, Button, Event, EventType};
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, LPARAM, WPARAM};
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+    GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetForegroundWindow, GetWindowThreadProcessId,
+    DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId,
+    MSG, PostQuitMessage, PostThreadMessageW, TranslateMessage, WM_QUIT,
 };
 #[cfg(feature = "trail")]
-use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
-};
+use windows::Win32::UI::WindowsAndMessaging::{PM_REMOVE, PeekMessageW};
 use windows::core::PWSTR;
 
 use crate::gesture::{GestureTracker, Outcome};
@@ -100,6 +99,19 @@ fn consume_replay_skip() -> bool {
 /// holds no capture state.
 pub struct WindowsPlatform;
 
+/// Asks the Win32 message loop on the main thread to exit.
+///
+/// The tray menu handler runs on that thread, so `PostQuitMessage` targets the
+/// right message queue.
+#[derive(Clone, Copy)]
+pub struct QuitHandle;
+
+impl QuitHandle {
+    pub fn request(self) {
+        unsafe { PostQuitMessage(0) };
+    }
+}
+
 impl WindowsPlatform {
     pub fn new() -> WindowsPlatform {
         WindowsPlatform
@@ -150,10 +162,20 @@ impl Platform for WindowsPlatform {
         crate::action::click_right()
     }
 
+    fn quit_handle(&self) -> QuitHandle {
+        QuitHandle
+    }
+
     fn run(&mut self) -> Result<(), String> {
         // Seed the pointer cache with the real cursor position so a gesture
         // started before any mouse move uses a correct origin.
         init_last_pos();
+
+        // rdev::grab runs its own message loop, so it must not run on the
+        // thread that owns the tray window. Install the hooks on a worker and
+        // report an installation failure back through a channel + WM_QUIT.
+        let main_thread = unsafe { GetCurrentThreadId() };
+        let (fail_tx, fail_rx) = mpsc::channel::<String>();
 
         // Heavy work (foreground lookup, key injection) is moved to a worker
         // thread so the low-level hook callback stays fast and the system
@@ -239,8 +261,35 @@ impl Platform for WindowsPlatform {
             }
         };
 
-        grab(callback).map_err(|e| format!("failed to install input hook: {e:?}"))?;
-        Ok(())
+        std::thread::spawn(move || {
+            if let Err(e) = grab(callback) {
+                let _ = fail_tx.send(format!("failed to install input hook: {e:?}"));
+                unsafe {
+                    let _ = PostThreadMessageW(main_thread, WM_QUIT, WPARAM(0), LPARAM(0));
+                }
+            }
+        });
+
+        // Service the tray window on this thread; WM_QUIT ends the loop.
+        let mut msg = MSG::default();
+        loop {
+            let result = unsafe { GetMessageW(&mut msg, None, 0, 0) };
+            if result.0 == 0 {
+                break;
+            }
+            if result.0 == -1 {
+                return Err("failed to read window messages".into());
+            }
+            unsafe {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+
+        match fail_rx.try_recv() {
+            Ok(message) => Err(message),
+            Err(_) => Ok(()),
+        }
     }
 }
 
