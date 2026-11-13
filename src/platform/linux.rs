@@ -203,7 +203,7 @@ impl Platform for LinuxPlatform {
         self.grab_right_button()?;
 
         #[cfg(feature = "trail")]
-        let overlay = match X11Overlay::create(&self.conn, self.screen_num) {
+        let mut overlay = match X11Overlay::create(&self.conn, self.screen_num) {
             Some(Ok(overlay)) => Some(overlay),
             Some(Err(e)) => {
                 eprintln!("[mouse] trail overlay disabled: {e}");
@@ -229,7 +229,7 @@ impl Platform for LinuxPlatform {
                     tracker.start(ev.root_x as f64, ev.root_y as f64);
                     tracking = true;
                     #[cfg(feature = "trail")]
-                    if let Some(overlay) = &overlay
+                    if let Some(overlay) = &mut overlay
                         && let Err(e) = overlay.show(&self.conn) {
                             eprintln!("[mouse] {e}");
                         }
@@ -237,7 +237,7 @@ impl Platform for LinuxPlatform {
                 Event::MotionNotify(ev) if tracking => {
                     tracker.add(ev.root_x as f64, ev.root_y as f64);
                     #[cfg(feature = "trail")]
-                    if let Some(overlay) = &overlay
+                    if let Some(overlay) = &mut overlay
                         && let Err(e) = overlay.draw(&self.conn, tracker.points()) {
                             eprintln!("[mouse] {e}");
                         }

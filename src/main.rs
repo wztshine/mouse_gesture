@@ -108,7 +108,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
 fn run_overlay_test() -> Result<(), String> {
     use x11rb::connect;
     let (conn, screen_num) = connect(None).map_err(|e| format!("connect: {e}"))?;
-    let overlay = crate::platform::x11_overlay::X11Overlay::create(&conn, screen_num)
+    let mut overlay = crate::platform::x11_overlay::X11Overlay::create(&conn, screen_num)
         .ok_or("no 32-bit visual")?
         .map_err(|e| format!("create: {e}"))?;
     overlay.show(&conn)?;
