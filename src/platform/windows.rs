@@ -42,18 +42,10 @@ static LAST_POS: OnceLock<Mutex<(f64, f64)>> = OnceLock::new();
 /// re-trigger gesture tracking (which would loop forever).
 static REPLAY_SKIP: OnceLock<Mutex<u32>> = OnceLock::new();
 
+#[derive(Default)]
 struct GestureState {
     tracker: GestureTracker,
     tracking: bool,
-}
-
-impl Default for GestureState {
-    fn default() -> Self {
-        GestureState {
-            tracker: GestureTracker::default(),
-            tracking: false,
-        }
-    }
 }
 
 fn last_pos() -> Option<(f64, f64)> {
@@ -241,9 +233,9 @@ impl Platform for WindowsPlatform {
                     state.tracking = false;
                     #[cfg(feature = "trail")]
                     let _ = otx.send(OverlayMsg::Hide);
-                    let Some((x, y)) = last_pos() else {
-                        return None;
-                    };
+                    // `?` is equivalent here: both swallow the release when
+                    // no cached position exists (unreachable in practice).
+                    let (x, y) = last_pos()?;
                     if let Some(outcome) = state.tracker.finish(x, y) {
                         if let Outcome::Click = outcome {
                             // Replay a synthetic click; set skip for its press+release.

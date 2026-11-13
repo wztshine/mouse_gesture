@@ -255,8 +255,7 @@ fn create_inner() -> Result<WinOverlay, String> {
     let hwnd = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE(
-                (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0 | WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0)
-                    as u32,
+                WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0 | WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0,
             ),
             class_name,
             w!(""),
