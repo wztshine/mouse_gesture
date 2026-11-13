@@ -1,8 +1,8 @@
 use x11rb::connection::Connection;
 use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
 use x11rb::protocol::xproto::{
-    ColormapAlloc, ConnectionExt as _, CoordMode, CreateGCAux, CreateWindowAux, EventMask,
-    Gcontext, Pixmap, VisualClass, Visualid, Window, WindowClass,
+    CapStyle, ColormapAlloc, ConnectionExt as _, CoordMode, CreateGCAux, CreateWindowAux,
+    EventMask, Gcontext, JoinStyle, Pixmap, VisualClass, Visualid, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 
@@ -256,6 +256,14 @@ fn create_inner(
     let line_aux = CreateGCAux::new()
         .foreground(TRAIL_COLOR)
         .line_width(LINE_WIDTH)
+        // Incremental drawing paints each segment as its own request, so
+        // every vertex is a seam between requests: round caps overlap and
+        // hide those seams. Round joins also bound the painted extent to
+        // width/2 around the path, so the blit margin below always covers
+        // every painted pixel (a miter join on acute angles could spike far
+        // outside the blitted rectangle).
+        .cap_style(CapStyle::ROUND)
+        .join_style(JoinStyle::ROUND)
         .graphics_exposures(0);
     conn.create_gc(line_gc, pixmap, &line_aux)
         .map_err(|e| format!("create_gc: {e}"))?
