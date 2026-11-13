@@ -27,7 +27,7 @@
 "D" = ["end"]
 "DR" = ["ctrl", "w"]
 "UL" = ["ctrl", "shift", "t"]
-"DL" = ["win", "h"]
+"DL" = ["alt", "space", "n"]
 
 [app."Gnome-terminal"]
 "DR" = ["ctrl", "shift", "w"]
